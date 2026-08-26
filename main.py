@@ -1,16 +1,31 @@
-# This is a sample Python script.
+"""Application entry point for the Ulink IB course scheduling system.
 
-# Press ⌃R to execute it or replace it with your code.
-# Press Double ⇧ to search everywhere for classes, files, tool windows, actions, and settings.
+This file is intentionally small. It prepares the SQLite database, inserts
+anonymous demo data if the database is empty, and then starts the Tkinter GUI.
+Keeping startup code here makes it easy for PyCharm users to run the whole
+project by pressing Run on this single file.
+"""
+
+from scheduler_app.database import initialize_database
+from scheduler_app.gui import SchedulingApp
+from scheduler_app.seed_data import seed_demo_data
 
 
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press ⌘F8 to toggle the breakpoint.
+def main() -> None:
+    """Create the database and launch the desktop application."""
+    # The database file is stored beside main.py so the app stays portable.
+    db_path = "school_schedule.db"
+
+    # Create all tables before any feature tries to query them.
+    initialize_database(db_path)
+
+    # Populate the project with anonymous school-like data for IA testing.
+    seed_demo_data(db_path)
+
+    # Start the Tkinter event loop. All user interaction happens inside it.
+    app = SchedulingApp(db_path)
+    app.mainloop()
 
 
-# Press the green button in the gutter to run the script.
-if __name__ == '__main__':
-    print_hi('PyCharm')
-
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+if __name__ == "__main__":
+    main()

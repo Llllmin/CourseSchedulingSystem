@@ -1,3 +1,10 @@
+"""Tkinter graphical user interface for the scheduling system.
+
+The GUI is deliberately written with standard-library Tkinter so the IA project
+can run in PyCharm without installing extra packages. The interface demonstrates
+the required user roles: admin, teacher, and student.
+"""
+
 import tkinter as tk
 from tkinter import ttk
 
@@ -8,25 +15,35 @@ from scheduler_app.scheduler import TimetableScheduler, timetable_rows
 
 
 class SchedulingApp(tk.Tk):
+    """Main desktop window and all screen-building methods."""
+
     def __init__(self, db_path: str):
+        """Initialize the window, connect the scheduler, and show login first."""
         super().__init__()
         self.db_path = db_path
         self.scheduler = TimetableScheduler(db_path)
+
+        # Basic window settings make the app usable on a school laptop screen.
         self.title("Ulink IB Course Scheduling System")
         self.geometry("1120x720")
         self.minsize(960, 620)
+
+        # current_user stores the logged-in database row as a dictionary.
         self.current_user = None
         self._show_login()
 
     def _clear(self) -> None:
+        """Remove every widget so the next screen can be built cleanly."""
         for child in self.winfo_children():
             child.destroy()
 
     def _show_login(self) -> None:
+        """Build the login form and route users based on their role."""
         self._clear()
         frame = ttk.Frame(self, padding=36)
         frame.pack(expand=True)
 
+        # Username and password fields collect credentials for database lookup.
         ttk.Label(frame, text="Ulink IB Course Scheduling System", font=("Arial", 20, "bold")).grid(row=0, column=0, columnspan=2, pady=(0, 24))
         ttk.Label(frame, text="Username").grid(row=1, column=0, sticky="e", padx=8, pady=8)
         username = ttk.Entry(frame, width=28)
@@ -38,6 +55,7 @@ class SchedulingApp(tk.Tk):
         status.grid(row=4, column=0, columnspan=2, pady=(16, 0))
 
         def login() -> None:
+            """Check credentials, store the user, and open the correct screen."""
             with connect(self.db_path) as conn:
                 row = conn.execute(
                     "SELECT * FROM users WHERE username = ? AND password_hash = ?",
@@ -47,6 +65,8 @@ class SchedulingApp(tk.Tk):
                 status.configure(text="Invalid username or password.")
                 return
             self.current_user = dict(row)
+
+            # Admins receive editing tools; students/teachers receive filtered views.
             if row["role"] == ROLE_ADMIN:
                 self._show_admin()
             else:
@@ -57,17 +77,20 @@ class SchedulingApp(tk.Tk):
         self.bind("<Return>", lambda _event: login())
 
     def _header(self, parent: tk.Widget, title: str) -> None:
+        """Create a consistent title bar and logout button for each screen."""
         bar = ttk.Frame(parent, padding=(16, 12))
         bar.pack(fill="x")
         ttk.Label(bar, text=title, font=("Arial", 16, "bold")).pack(side="left")
         ttk.Button(bar, text="Logout", command=self._show_login).pack(side="right")
 
     def _show_admin(self) -> None:
+        """Build the administrator dashboard with multiple feature tabs."""
         self._clear()
         self._header(self, "Administrator Dashboard")
         notebook = ttk.Notebook(self)
         notebook.pack(fill="both", expand=True, padx=16, pady=12)
 
+        # Separate tabs match the admin workflows: generate, inspect, edit, data.
         generate_tab = ttk.Frame(notebook, padding=16)
         timetable_tab = ttk.Frame(notebook, padding=16)
         manual_tab = ttk.Frame(notebook, padding=16)
@@ -83,6 +106,7 @@ class SchedulingApp(tk.Tk):
         self._build_data_tab(data_tab)
 
     def _show_user_timetable(self) -> None:
+        """Show a role-filtered timetable for a student or teacher account."""
         self._clear()
         role = self.current_user["role"]
         title = "Teacher Timetable" if role == ROLE_TEACHER else "Student Timetable"
@@ -97,6 +121,7 @@ class SchedulingApp(tk.Tk):
         )
 
     def _build_generate_tab(self, parent: ttk.Frame, timetable_tab: ttk.Frame, manual_tab: ttk.Frame) -> None:
+        """Create the tab that runs the automatic timetable generator."""
         info = ttk.Label(
             parent,
             text="Generate a complete timetable from the stored students, teachers, rooms, course sections, enrollments, and blocked periods.",
@@ -107,6 +132,7 @@ class SchedulingApp(tk.Tk):
         output.pack(fill="both", expand=True)
 
         def generate() -> None:
+            """Generate the timetable and refresh dependent tabs after success."""
             ok, message = self.scheduler.generate()
             output.insert("end", message + "\n")
             output.see("end")
@@ -117,8 +143,11 @@ class SchedulingApp(tk.Tk):
         ttk.Button(parent, text="Generate Timetable", command=generate).pack(anchor="w", pady=12)
 
     def _build_timetable_tab(self, parent: ttk.Frame, role: str, student_id: int | None = None, teacher_id: int | None = None) -> None:
+        """Create a reusable table view for admin, teacher, and student users."""
         ttk.Button(parent, text="Refresh", command=lambda: self._refresh_timetable(parent, role, student_id, teacher_id)).pack(anchor="w", pady=(0, 8))
         tree = ttk.Treeview(parent, columns=("day", "period", "duration", "section", "course", "teacher", "room"), show="headings")
+
+        # Each heading becomes one visible column in the timetable table.
         for key, title, width in [
             ("day", "Day", 100),
             ("period", "Period", 70),
@@ -135,11 +164,16 @@ class SchedulingApp(tk.Tk):
         self._refresh_timetable(parent, role, student_id, teacher_id)
 
     def _refresh_timetable(self, parent: ttk.Frame, role: str, student_id: int | None = None, teacher_id: int | None = None) -> None:
+        """Reload timetable rows from SQLite and display them in the Treeview."""
         tree = getattr(parent, "_tree", None)
         if tree is None:
             return
+
+        # Clear old rows first so refresh never duplicates timetable entries.
         for item in tree.get_children():
             tree.delete(item)
+
+        # timetable_rows applies role-based filtering before data reaches the UI.
         for row in timetable_rows(self.db_path, role, student_id, teacher_id):
             tree.insert(
                 "",
@@ -148,8 +182,11 @@ class SchedulingApp(tk.Tk):
             )
 
     def _build_manual_tab(self, parent: ttk.Frame) -> None:
+        """Create controls for validating and saving manual timetable edits."""
         form = ttk.Frame(parent)
         form.pack(anchor="nw", fill="x")
+
+        # Tkinter StringVars keep combobox selections in sync with code.
         parent._section_var = tk.StringVar()
         parent._day_var = tk.StringVar(value=DAYS[0])
         parent._period_var = tk.StringVar(value="1")
@@ -161,6 +198,8 @@ class SchedulingApp(tk.Tk):
         vars_ = [parent._section_var, parent._day_var, parent._period_var, parent._room_var]
         values = [[], DAYS, [str(p) for p in PERIODS], []]
         widgets = []
+
+        # Build the four comboboxes using one loop to avoid repeated UI code.
         for column, (label, var, combo_values) in enumerate(zip(labels, vars_, values)):
             ttk.Label(form, text=label).grid(row=0, column=column, sticky="w", padx=(0, 12))
             combo = ttk.Combobox(form, textvariable=var, values=combo_values, width=24, state="readonly")
@@ -173,6 +212,7 @@ class SchedulingApp(tk.Tk):
         button_row.pack(anchor="w", pady=16)
 
         def selected_ids() -> tuple[int, int] | None:
+            """Extract numeric section and room IDs from combobox labels."""
             try:
                 section_id = int(parent._section_var.get().split(" | ", 1)[0])
                 room_id = int(parent._room_var.get().split(" | ", 1)[0])
@@ -182,6 +222,7 @@ class SchedulingApp(tk.Tk):
                 return None
 
         def validate() -> None:
+            """Check a proposed edit without saving it."""
             ids = selected_ids()
             if ids is None:
                 return
@@ -189,6 +230,7 @@ class SchedulingApp(tk.Tk):
             parent._message.configure(text=result.message)
 
         def save() -> None:
+            """Validate and then store a proposed edit if it is legal."""
             ids = selected_ids()
             if ids is None:
                 return
@@ -200,8 +242,11 @@ class SchedulingApp(tk.Tk):
         self._refresh_manual_options(parent)
 
     def _refresh_manual_options(self, parent: ttk.Frame) -> None:
+        """Load current sections and rooms into the manual-edit comboboxes."""
         if not hasattr(parent, "_section_combo"):
             return
+
+        # Sections and rooms are read from the database so new seed data appears.
         with connect(self.db_path) as conn:
             sections = conn.execute(
                 """
@@ -211,6 +256,8 @@ class SchedulingApp(tk.Tk):
                 """
             ).fetchall()
             rooms = conn.execute("SELECT id, room_code, room_type, capacity FROM rooms ORDER BY room_code").fetchall()
+
+        # Store the database ID at the start of each label for easy parsing.
         section_values = [f"{row['id']} | {row['section_code']} | {row['name']}" for row in sections]
         room_values = [f"{row['id']} | {row['room_code']} | {row['room_type']} | cap {row['capacity']}" for row in rooms]
         parent._section_combo.configure(values=section_values)
@@ -221,8 +268,11 @@ class SchedulingApp(tk.Tk):
             parent._room_var.set(room_values[0])
 
     def _build_data_tab(self, parent: ttk.Frame) -> None:
+        """Display database counts and sample scheduling records."""
         summary = ttk.Frame(parent)
         summary.pack(fill="x", pady=(0, 12))
+
+        # Count records to prove the demo dataset meets the IA scale requirement.
         with connect(self.db_path) as conn:
             counts = {
                 "Students": conn.execute("SELECT COUNT(*) FROM students").fetchone()[0],
@@ -234,6 +284,7 @@ class SchedulingApp(tk.Tk):
         for index, (label, value) in enumerate(counts.items()):
             ttk.Label(summary, text=f"{label}: {value}", font=("Arial", 11, "bold")).grid(row=0, column=index, padx=(0, 18), sticky="w")
 
+        # The text area provides a quick admin-readable view of stored data.
         ttk.Label(parent, text="Data management is stored in SQLite. Duplicate IDs and invalid references are rejected by database constraints.").pack(anchor="w")
         ttk.Button(parent, text="Show Sample Records", command=lambda: self._show_sample_records(parent)).pack(anchor="w", pady=12)
         text = tk.Text(parent, height=22, wrap="none")
@@ -242,9 +293,11 @@ class SchedulingApp(tk.Tk):
         self._show_sample_records(parent)
 
     def _show_sample_records(self, parent: ttk.Frame) -> None:
+        """Fill the data tab with representative rows from key tables."""
         text = parent._data_text
         text.delete("1.0", "end")
         with connect(self.db_path) as conn:
+            # Each query shows enough records to demonstrate stored entities.
             for title, query in [
                 ("Students", "SELECT student_code, name, grade FROM students LIMIT 8"),
                 ("Teachers", "SELECT teacher_code, name, department FROM teachers LIMIT 8"),
