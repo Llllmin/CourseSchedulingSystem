@@ -93,6 +93,8 @@ def initialize_database(db_path: str) -> None:
                 course_id INTEGER NOT NULL,
                 teacher_id INTEGER NOT NULL,
                 duration INTEGER NOT NULL CHECK (duration IN (1, 2)),
+                level TEXT NOT NULL DEFAULT 'SL',
+                grade TEXT NOT NULL DEFAULT 'G12',
                 FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
                 FOREIGN KEY (teacher_id) REFERENCES teachers(id) ON DELETE RESTRICT
             );
@@ -127,15 +129,42 @@ def initialize_database(db_path: str) -> None:
             -- Generated or manually edited timetable placements are stored here.
             CREATE TABLE IF NOT EXISTS schedule_assignments (
                 id INTEGER PRIMARY KEY,
-                section_id INTEGER NOT NULL UNIQUE,
+                section_id INTEGER NOT NULL,
+                occurrence INTEGER NOT NULL DEFAULT 1 CHECK (occurrence > 0),
                 day TEXT NOT NULL,
                 period INTEGER NOT NULL,
                 room_id INTEGER NOT NULL,
+                UNIQUE(section_id, occurrence),
                 FOREIGN KEY (section_id) REFERENCES course_sections(id) ON DELETE CASCADE,
                 FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE RESTRICT
             );
             """
         )
+        # Run the legacy demo-lunch migration once; preserve all other blocks.
+        conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY)")
+        migration = "flexible_student_lunch_p5_p6"
+        if not conn.execute("SELECT 1 FROM schema_migrations WHERE name = ?", (migration,)).fetchone():
+            conn.execute("DELETE FROM blocked_periods WHERE period = 4 AND reason = 'Lunch'")
+            conn.execute("INSERT INTO schema_migrations(name) VALUES (?)", (migration,))
+        # Upgrade old prototypes without deleting people, enrollments or slots.
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(course_sections)")}
+        if "level" not in columns:
+            conn.execute("ALTER TABLE course_sections ADD COLUMN level TEXT NOT NULL DEFAULT 'SL'")
+            conn.execute("ALTER TABLE course_sections ADD COLUMN grade TEXT NOT NULL DEFAULT 'G12'")
+            conn.execute("UPDATE course_sections SET level = 'HL' WHERE course_id IN (SELECT id FROM courses WHERE course_code LIKE '%HL')")
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(schedule_assignments)")}
+        if "occurrence" not in columns:
+            conn.execute("ALTER TABLE schedule_assignments RENAME TO old_assignments")
+            conn.execute("""CREATE TABLE schedule_assignments (
+                id INTEGER PRIMARY KEY, section_id INTEGER NOT NULL,
+                occurrence INTEGER NOT NULL DEFAULT 1 CHECK(occurrence > 0),
+                day TEXT NOT NULL, period INTEGER NOT NULL, room_id INTEGER NOT NULL,
+                UNIQUE(section_id, occurrence),
+                FOREIGN KEY(section_id) REFERENCES course_sections(id) ON DELETE CASCADE,
+                FOREIGN KEY(room_id) REFERENCES rooms(id) ON DELETE RESTRICT)""")
+            conn.execute("""INSERT INTO schedule_assignments(id, section_id, day, period, room_id)
+                SELECT id, section_id, day, period, room_id FROM old_assignments""")
+            conn.execute("DROP TABLE old_assignments")
 
 
 def table_count(conn: sqlite3.Connection, table: str) -> int:

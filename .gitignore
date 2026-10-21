@@ -1,4 +1,9 @@
 __pycache__/
+.venv/
+backups/
+data/
+*.db
+*.db-*
 *.pyc
 school_schedule.db
 .DS_Store

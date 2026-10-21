@@ -6,6 +6,8 @@ Keeping startup code here makes it easy for PyCharm users to run the whole
 project by pressing Run on this single file.
 """
 
+from pathlib import Path
+
 from scheduler_app.database import initialize_database
 from scheduler_app.gui import SchedulingApp
 from scheduler_app.seed_data import seed_demo_data
@@ -14,7 +16,7 @@ from scheduler_app.seed_data import seed_demo_data
 def main() -> None:
     """Create the database and launch the desktop application."""
     # The database file is stored beside main.py so the app stays portable.
-    db_path = "school_schedule.db"
+    db_path = str(Path(__file__).resolve().parent / "school_schedule.db")
 
     # Create all tables before any feature tries to query them.
     initialize_database(db_path)

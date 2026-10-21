@@ -20,9 +20,9 @@ class SchedulerTests(unittest.TestCase):
 
     def setUp(self):
         """Create an isolated database before each test."""
-        # mkstemp gives a real file path because SQLite needs a file database.
-        handle, self.db_path = tempfile.mkstemp(suffix=".db")
-        os.close(handle)
+        # Isolate the database and its automatic backups together.
+        self.folder = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.folder.name, "school.db")
 
         # Each test starts with the same schema and anonymous demo dataset.
         initialize_database(self.db_path)
@@ -31,7 +31,7 @@ class SchedulerTests(unittest.TestCase):
 
     def tearDown(self):
         """Delete the temporary database after each test finishes."""
-        os.remove(self.db_path)
+        self.folder.cleanup()
 
     def test_demo_dataset_size(self):
         """Check that the seeded data meets the IA scale requirement."""
@@ -49,18 +49,86 @@ class SchedulerTests(unittest.TestCase):
         self.assertTrue(ok, message)
         self.assertLessEqual(elapsed, 10.0)
         with connect(self.db_path) as conn:
-            sections = conn.execute("SELECT COUNT(*) FROM course_sections").fetchone()[0]
+            sections = 102
             assignments = conn.execute("SELECT COUNT(*) FROM schedule_assignments").fetchone()[0]
         self.assertEqual(sections, assignments)
 
     def test_blocked_period_rejected(self):
-        """Verify that lunch/blocked periods cannot receive class assignments."""
+        """School-wide blocks still apply independently of flexible lunch."""
         with connect(self.db_path) as conn:
+            conn.execute("INSERT INTO blocked_periods VALUES ('Monday', 4, 'Assembly')")
             section_id = conn.execute("SELECT id FROM course_sections LIMIT 1").fetchone()[0]
             room_id = conn.execute("SELECT id FROM rooms WHERE room_type = 'standard' LIMIT 1").fetchone()[0]
         result = self.scheduler.validate_assignment(section_id, "Monday", 4, room_id)
         self.assertFalse(result.valid)
-        self.assertIn("Lunch", result.message)
+        self.assertIn("Assembly", result.message)
+
+    def _lunch_sections(self):
+        """Two standard-room classes sharing a student, but different teachers."""
+        with connect(self.db_path) as conn:
+            for section in (1, 3):
+                conn.execute("INSERT OR IGNORE INTO student_enrollments VALUES (1, ?)", (section,))
+        return 1, 3
+
+    def test_lunch_either_period_allowed_but_not_both(self):
+        first, second = self._lunch_sections()
+        self.assertTrue(self.scheduler.save_manual_assignment(first, "Monday", 5, 1).valid)
+        result = self.scheduler.save_manual_assignment(second, "Monday", 6, 3)
+        self.assertFalse(result.valid)
+        self.assertIn("Student 001", result.message)
+        self.assertIn("lunch", result.message)
+        # A different day is independent, and freeing P5 permits P6.
+        self.assertTrue(self.scheduler.validate_assignment(second, "Tuesday", 6, 3).valid)
+        self.assertTrue(self.scheduler.save_manual_assignment(first, "Monday", 3, 1).valid)
+        self.assertTrue(self.scheduler.save_manual_assignment(second, "Monday", 6, 3).valid)
+        self.assertFalse(self.scheduler.validate_assignment(first, "Monday", 5, 1).valid)
+
+    def test_double_lesson_cannot_consume_both_lunch_periods(self):
+        self._lunch_sections()
+        with connect(self.db_path) as conn:
+            conn.execute("UPDATE course_sections SET duration = 2 WHERE id = 1")
+        self.assertFalse(self.scheduler.validate_assignment(1, "Monday", 5, 1).valid)
+        self.assertTrue(self.scheduler.validate_assignment(1, "Monday", 4, 1).valid)
+        self.assertTrue(self.scheduler.validate_assignment(1, "Monday", 6, 1).valid)
+
+    def test_lunch_independent_students_and_manual_self_replacement(self):
+        self._lunch_sections()
+        with connect(self.db_path) as conn:
+            conn.execute("DELETE FROM student_enrollments WHERE section_id = 3")
+        self.assertTrue(self.scheduler.save_manual_assignment(1, "Monday", 5, 1).valid)
+        self.assertTrue(self.scheduler.save_manual_assignment(3, "Monday", 6, 3).valid)
+        self.assertTrue(self.scheduler.save_manual_assignment(1, "Monday", 6, 1).valid)
+
+    def test_legacy_lunch_migration_is_one_time(self):
+        with connect(self.db_path) as conn:
+            conn.execute("DELETE FROM schema_migrations")
+            conn.execute("INSERT INTO blocked_periods VALUES ('Monday', 4, 'Lunch')")
+            conn.execute("INSERT INTO blocked_periods VALUES ('Tuesday', 4, 'Assembly')")
+        initialize_database(self.db_path)
+        with connect(self.db_path) as conn:
+            self.assertIsNone(conn.execute("SELECT 1 FROM blocked_periods WHERE day = 'Monday' AND period = 4").fetchone())
+            self.assertIsNotNone(conn.execute("SELECT 1 FROM blocked_periods WHERE day = 'Tuesday' AND period = 4").fetchone())
+            conn.execute("INSERT INTO blocked_periods VALUES ('Monday', 4, 'Lunch')")
+        initialize_database(self.db_path)
+        with connect(self.db_path) as conn:
+            self.assertIsNotNone(conn.execute("SELECT 1 FROM blocked_periods WHERE day = 'Monday' AND period = 4").fetchone())
+
+    def test_generated_students_keep_lunch(self):
+        self.assertTrue(self.scheduler.generate()[0])
+        with connect(self.db_path) as conn:
+            students = [r[0] for r in conn.execute("SELECT id FROM students")]
+        for student in students:
+            occupied = {}
+            for lesson in timetable_rows(self.db_path, "student", student_id=student):
+                occupied.setdefault(lesson["day"], set()).update(
+                    range(lesson["period"], lesson["period"] + lesson["duration"]))
+            self.assertTrue(all(not {5, 6}.issubset(slots) for slots in occupied.values()))
+
+    def test_last_period_and_overflow(self):
+        self.assertTrue(self.scheduler.validate_assignment(1, "Monday", 11, 1).valid)
+        with connect(self.db_path) as conn:
+            conn.execute("UPDATE course_sections SET duration = 2 WHERE id = 1")
+        self.assertFalse(self.scheduler.validate_assignment(1, "Monday", 11, 1).valid)
 
     def test_room_type_rejected(self):
         """Verify that a lab course cannot be assigned to a standard room."""

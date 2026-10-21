@@ -36,4 +36,5 @@ Recommended diagrams and tables:
 ## Criterion E Evaluation Ideas
 
 - Compare each success criterion against test output and GUI demonstration.
-- Improvements: spreadsheet import/export, stronger password storage with salted hashes, optimization for larger datasets, automatic repair suggestions after teacher absence, and multi-campus room constraints.
+- Implemented evidence: validated Excel import/export, editable school records, weekly HL/SL/core lesson counts, balanced weekdays, per-student lunch, atomic updates and backups.
+- Improvements: stronger password storage with salted hashes, optimization for larger datasets, mixed single/double patterns, automatic repair suggestions after teacher absence, and multi-campus room constraints.
